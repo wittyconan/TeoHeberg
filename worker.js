@@ -601,7 +601,7 @@ function renderAccounts(accounts) {
         </div>
       </div>
       <div class="account-actions">
-        <button class="btn btn-success btn-sm" onclick="runAccount('\${a.email}')" \${inCooldown ? 'disabled style="opacity:0.5"' : ''}>▶️ 执行</button>
+        <button class="btn btn-success btn-sm" onclick="runAccount('\${a.email}')">▶️ 执行</button>
         <button class="btn btn-warning btn-sm" onclick="openCookieModal('\${a.email}')">🍪 更新</button>
         <button class="btn btn-danger btn-sm" onclick="removeAccount('\${a.email}')">🗑️</button>
       </div>
