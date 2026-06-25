@@ -1,4 +1,4 @@
-name: TeoHeberg 续期3
+name: TeoHeberg 续期
 
 on:
   workflow_dispatch:
