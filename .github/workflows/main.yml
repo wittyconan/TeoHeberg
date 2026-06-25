@@ -1,0 +1,77 @@
+name: TeoHeberg 续期3
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '28 0 * * *'  # 北京时间 08:28
+
+jobs:
+  run:
+    name: 执行续期
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30  # 可酌情调整
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装系统依赖与 Python 包
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb ffmpeg mesa-utils libgl1-mesa-glx libgl1-mesa-dri
+
+          pip install --quiet playwright requests SpeechRecognition pydub
+          python -m playwright install --with-deps chromium
+
+      - name: 启用 WARP
+        uses: fscarmen/warp-on-actions@v1.3
+        with:
+          stack: dual
+          mode: client
+
+      - name: 配置 DNS 并等待 WARP 就绪
+        run: |
+          set -euo pipefail
+          sudo systemctl stop systemd-resolved 2>/dev/null || true
+          sudo rm -f /etc/resolv.conf
+          echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" | sudo tee /etc/resolv.conf
+          sudo chattr +i /etc/resolv.conf 2>/dev/null || true
+
+          for i in {1..30}; do
+            status=$(curl -s --max-time 5 https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'warp=\K\w+' || echo unknown)
+            [[ "$status" =~ ^(on|plus)$ ]] && echo "WARP 已连接" && break
+            echo "等待 WARP ($i/30)..."
+            sleep 2
+          done
+          echo -n "出口 IP: " && curl -s https://api.ipify.org
+
+      - name: 执行续期脚本
+        env:
+          TEOHEBERG: ${{ secrets.TEOHEBERG }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          DISPLAY: :99
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: "llvmpipe"
+        run: |
+          xvfb-run --auto-servernum \
+            --server-args="-screen 0 1920x1080x24 -ac -noreset +extension GLX +render" \
+            python scripts/main.py
+
+      - name: 清理旧工作流运行记录
+        if: always()
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          delete_workflow_pattern: ${{ github.workflow }}
+          retain_days: 0
+          keep_minimum_runs: 2
