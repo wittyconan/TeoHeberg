@@ -1,48 +1,115 @@
-# TeoHeberg 广告任务自动化
+# TeoHeberg 自动化工具集
 
-> 动动小手点点 Star ⭐
+> 两种实现，覆盖续期与每日广告任务，任选其一或搭配使用，让你的免费主机永不过期。
 
-基于 **Cloudflare Workers** 部署的 **TeoHeberg 每日广告任务**自动化脚本，自动完成 Linkvertise 广告、追踪积分变化，并通过 Telegram 推送通知。
+本仓库提供两套独立运行的自动化方案：
 
----
+1. **Python 自动续期脚本** – 基于 Playwright 模拟浏览器，自动登录、识别验证码、续期，并完成广告任务，适合部署在 GitHub Actions。  
+2. **Cloudflare Workers 广告任务自动化** – 轻量级无服务器实现，专注于每日广告积分，支持多账号管理、Web 管理面板和 API 触发。
 
-## ✨ 最新优化
-
-- ⚡ **降低子请求消耗**：单次最多执行 3 轮广告，定时任务每次只处理 1 个可执行账号，避免触发 Cloudflare Workers 免费计划限制  
-- 🧠 **智能冷却机制**：  
-  - 广告成功后冷却 24.5 小时  
-  - 当一个账号额度用完时，设置短期冷却2小时，但之后广告成功，则切换到24.5小时冷却。（避免频繁无效请求）  
-- 📊 **积分估算**：直接通过前后积分差值计算完成广告数，无需额外页面解析  
-- 🖥️ **前端增强**：管理面板显示冷却状态、剩余冷却时间，自动禁用冷却中账号的执行按钮  
+以下分别说明。
 
 ---
 
-## 📌 功能说明
+## 方案一：Python 自动续期脚本（Playwright + GitHub Actions）
 
-- ✅ 自动完成每日广告任务  
-- ✅ 多账号管理，支持批量导入  
-- ✅ 积分提取，Telegram 通知展示积分变化  
-- ✅ 支持手动触发（网页管理面板 / API）  
-- ✅ 支持定时 Cron 触发（建议每 5 分钟）  
-- ✅ 前端界面支持账号增删、Cookie 手动更新、单账号执行、强制执行  
-- ✅ 完整 API 接口，可集成到其他自动化流程  
+### 功能亮点
+
+- 🔐 **自动登录** – 使用环境变量中的邮箱/密码，完成登录全流程。  
+- ♻️ **智能续期** – 解析服务器到期时间，剩余不足 2 天时自动执行续期（含第二次验证码）。  
+- 🧠 **reCAPTCHA 音频破解** – 自动切换至音频挑战，下载 MP3 并用语音识别完成验证，无需第三方打码服务。  
+- 🪙 **广告积分获取** – 直接提取 Linkvertise 最终链接，绕过等待页，循环执行直到当日额度用完。  
+- 📬 **Telegram 通知** – 将续期结果、积分变化、截图实时推送到你的 Telegram。
+
+### 环境要求
+
+- Python 3.11+
+- Playwright (Chromium)
+- 系统依赖：`xvfb`, `ffmpeg`, `libgl1-mesa-glx` 等（在 GitHub Actions 中自动安装）
+
+### 本地运行
+
+1. **克隆仓库，安装依赖**
+
+   ```bash
+   sudo apt install xvfb ffmpeg libgl1-mesa-glx   # 仅 Linux 需要
+   pip install -r requirements.txt                 # playwright requests SpeechRecognition pydub
+   python -m playwright install --with-deps chromium
+   ```
+
+2. **设置环境变量**
+
+   ```bash
+   export TEOHEBERG="你的邮箱-----你的密码"
+   # 可选 Telegram
+   export TG_BOT_TOKEN="123456:ABC-DEF"
+   export TG_CHAT_ID="123456789"
+   ```
+
+3. **运行脚本**
+
+   ```bash
+   python scripts/main.py
+   ```
+
+   截图默认保存在 `screenshots/` 目录。
+
+### GitHub Actions 部署
+
+1. 将代码推送至 GitHub 仓库。  
+2. 在仓库 Settings → Secrets and variables → Actions 中添加以下 Secret：
+
+   | Secret 名称 | 说明 | 必填 |
+   |------------|------|------|
+   | `TEOHEBERG` | 账号信息，格式：`邮箱-----密码` | ✅ |
+   | `TG_BOT_TOKEN` | Telegram Bot Token | ❌ |
+   | `TG_CHAT_ID` | 接收通知的 Chat ID | ❌ |
+
+3. 工作流文件已包含（位于 `.github/workflows/teoheberg-renew.yml`），默认 cron 为北京时间每天 08:28。  
+   - 手动触发：Actions → “TeoHeberg 续期” → Run workflow。
+  
+> 📌 通知：![通知](img/TeoHeberg.png)
+
+#### 工作流核心步骤概览
+
+- 检出代码，安装 Python 3.11 及系统依赖（xvfb、ffmpeg 等）。  
+- 启用 Cloudflare WARP（通过 `fscarmen/warp-on-actions`）以规避 reCAPTCHA IP 封锁。  
+- 配置 DNS 并等待 WARP 就绪。  
+- 在虚拟显示（`xvfb-run`）下执行 `python scripts/main.py`。  
+- 自动清理旧的工作流运行记录。
+
+> ⏳ 超时时间：30 分钟，可根据需要调整。
+
+### 脚本执行流程图
+
+1. 登录 → reCAPTCHA 音频破解 → 进入管理面板  
+2. 检查服务器到期时间：  
+   - 剩余 ≥ 2 天 → 跳过续期  
+   - 剩余 < 2 天 → 点击 Renew → 再次破解 reCAPTCHA → 确认续期  
+3. 循环点击 “Earn Credits” → 获取 Linkvertise 链接 → 直接访问目标 URL → 等待返回，直至出现 `Limite quotidienne atteinte`  
+4. 汇总结果并发送 Telegram 通知（含截图）
 
 ---
 
-## ⚠️ 注意事项
+## 方案二：Cloudflare Workers 广告任务自动化
 
-> ❗ 依赖已登录的 Cookie，**不提供自动登录功能**，需手动获取长期有效的 `remember_web`。  
-> ❗ 登录时务必勾选 **Se souvenir de moi**（记住我），以获取长期 Cookie。  
+> ⚡ 轻量、零运维，专注于每日广告积分，支持多账号管理和前端面板。
 
----
+### 功能说明
 
-## 📝 注册地址
+- ✅ **自动完成每日广告任务** – 模拟请求，直接解析 Linkvertise 并完成验证。  
+- ✅ **多账号批量管理** – 支持添加、删除、Cookie 手动更新。  
+- ✅ **积分追踪与通知** – 对比前后积分差值，Telegram 推送完成次数和积分变化。  
+- ✅ **智能冷却机制** – 广告成功后冷却 24.5 小时；一个账号额度用完时短暂冷却 2 小时。  
+- ✅ **管理面板** – 网页 UI 可视化管理所有账号，显示冷却状态，手动执行单个或全部可用账号。  
+- ✅ **完整 API** – 可通过 HTTP 触发单个/全部账号，便于集成。
 
-👉 [https://manager.teoheberg.fr/](https://manager.teoheberg.fr/)
+### 注意事项
 
----
+> ❗ 本方案依赖已登录的长期 Cookie（`remember_web`），**不提供自动登录**。你需要手动获取并填写。  
+> ❗ 登录时务必勾选 **“Se souvenir de moi”**（记住我），以获取长期有效 Cookie。
 
-## 🚀 部署方式
+### 部署方式（Cloudflare Workers）
 
 1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)，进入 Workers 页面  
 2. 创建一个新的 Worker，将 [worker.js](./worker.js) 代码粘贴进去  
@@ -50,143 +117,84 @@
 4. 配置环境变量（见下表）  
 5. 部署 Worker  
 
----
+   | 变量名 | KV 命名空间 |
+   |--------|------------|
+   | `TEOHEBERG_KV` | 你创建的 KV |
 
-## 🔧 环境变量配置
+4. 在 Worker 设置 → Variables → Environment Variables 中添加：
 
-| 变量名 | 说明 | 是否必须 |
-|--------|------|----------|
-| `AUTH_KEY` | 访问密钥，保护 API 和管理面板 | ✅ 是 |
-| `TELEGRAM_BOT_TOKEN` | Telegram Bot Token | 否（不填则不通知） |
-| `TELEGRAM_CHAT_ID` | 接收通知的 Chat ID | 否 |
+   | 变量名 | 说明 | 必填 |
+   |--------|------|------|
+   | `AUTH_KEY` | 访问密钥（保护面板和 API） | ✅ |
+   | `TELEGRAM_BOT_TOKEN` | Telegram Bot Token | ❌ |
+   | `TELEGRAM_CHAT_ID` | 接收通知的 Chat ID | ❌ |
 
-### ⚙️ KV 绑定
+5. 部署 Worker。
 
-在 Worker 设置 → Variables → KV Namespace Bindings 中添加：
+### 如何获取长期 Cookie
 
-| 变量名 | KV 命名空间 |
-|--------|------------|
-| `TEOHEBERG_KV` | 你创建的 KV |
+1. 打开浏览器，**F12** 打开开发者工具，切换到 **Network**（网络）标签。  
+2. 访问 `https://manager.teoheberg.fr` 并登录（**务必勾选“Se souvenir de moi”**）。  
+3. 在 Network 中找到名为 `login` 的请求，点击它，在 **Request Headers** 中找到 `Cookie:` 行。  
+4. 复制以 `remember_web_` 开头的整个值，例如：  
 
----
+   ```
+   remember_web_59ba3xxx89d=eyJpdiI6xxxiIn0%3D
+   ```
 
-## 📄 账号添加格式
+5. 按照以下格式添加到管理面板（每行一个账号）：
 
-在管理面板的文本框中，按以下格式输入（每行一个账号）：
+   ```
+   邮箱或备注-----remember_web_59ba3xxx89d=eyJpdiI6xxxiIn0%3D
+   ```
 
-```
-邮箱或备注-----remember_web_xxx=...
-```
-
-**示例**：
-
-```
-admin@gmail.com-----remember_web_59ba3xxx89d=eyJpdiI6xxxiIn0%3D
-大号-----remember_web_59ba3xxx89d=eyJpdiI6xxxiIn0%3D
-```
-
-多个账号可以一次粘贴多行，系统会自动解析。
-
----
-
-## 🔍 如何获取 Cookie？
-
-### 第 1 步：打开浏览器，先不要输入网址  
-### 第 2 步：按 F12 打开开发者工具  
-- 按键盘 **F12**（笔记本可能需要 `Fn + F12`）  
-- 或者右键页面空白处 → “检查”  
-- 你会看到屏幕右侧或下方出现一个调试面板，包含 Elements、Console、Network 等标签  
-
-### 第 3 步：在地址栏输入网站  
-- 输入 `https://manager.teoheberg.fr` 并回车，让页面加载  
-
-### 第 4 步：登录账号（必须勾选“记住我”）  
-- 输入邮箱和密码  
-- **⚠️ 最重要的一步**：勾选 `Se souvenir de moi`（法语“记住我”）  
-- 点击登录按钮  
-
-### 第 5 步：找到 login 请求并提取 Cookie  
-- 回到 F12 调试面板，点击 **Network** 标签  
-- 如果登录后才打开 Network，里面可能是空的 → 按 **F5** 刷新页面  
-- 在 Network 列表中找到名为 **login** 的请求（通常排在前面），点击它  
-- 右侧弹出详细窗口，找到 **Request Headers** → 向下翻，找到 `Cookie:` 这一行  
-- **只复制以 `remember_web_` 开头的部分**，例如：  
-
-  ```
-  remember_web_59ba3xxx89d=eyJpdiI6xxxiIn0%3D
-  ```
-
-### 第 6 步：保存成指定格式  
-
-```
-你的邮箱-----remember_web_59ba3xxx89d=eyJpdiI6xxxiIn0%3D
-```
-
-中间是 **5 个减号**。
+   中间为 **5 个短横线**。
 
 > 📌 图片参考：![Cookie格式](img/Cookie.png)
 > 📌 图片参考：![Cookie格式](img/Cookie2.png)
 
----
+### 定时触发
 
-## ⏰ 定时任务（Cron）
-
-在 Worker 的 **Triggers** 中添加 Cron 触发器，**建议每 5 分钟执行一次**，例如：
+在 Worker 的 **Triggers** 中添加 Cron 触发器，推荐每 5 分钟一次：
 
 ```
 */5 * * * *
 ```
 
-> 含义：每隔 30 分钟自动触发一次，脚本会自动检测冷却状态，只处理可执行的账号（最多 1 个/次），完全安全且不会浪费子请求。
+每次执行仅处理 **1 个**可执行账号（冷却已过的），完全不会触发免费计划限制。
 
----
+### 使用方式
 
-## 🌐 使用方式
+#### 1. 管理面板
 
-### 1️⃣ 浏览器管理面板
+直接访问 Worker 域名，输入你设置的 `AUTH_KEY` 即可进入：
 
-直接访问 Worker 域名，输入 `AUTH_KEY` 即可进入管理界面：
+- 查看账号列表、冷却状态、可执行数量  
+- 批量添加 / 删除账号  
+- 手动执行单个账号（可强制忽略冷却）  
+- 手动执行所有可用账号  
+- 弹窗更新 Cookie
 
-```
-https://你的域名
-```
+#### 2. API 接口
 
-**功能包括**：
-- 📊 查看账号列表、可执行账号数量和冷却状态  
-- ✏️ 批量添加账号  
-- 🗑️ 删除账号  
-- ▶️ 手动执行单个账号（忽略冷却）  
-- 🔄 手动执行所有可用账号（跳过冷却中的）  
-- 🍪 弹窗手动更新 Cookie  
-
-### 2️⃣ API 触发单个账号
-
+**执行单个账号**（可带 `force=true` 强制忽略冷却）：
 ```bash
-curl "https://你的域名/run?email=admin@example.com&key=你的AUTH_KEY&force=true"
+curl "https://你的域名/run?email=admin@example.com&key=AUTH_KEY&force=true"
 ```
-> 添加 `force=true` 可强制忽略冷却，立即执行。
 
-### 3️⃣ API 触发所有账号
-
+**执行所有可用账号**（自动跳过冷却，每次仅处理一个）：
 ```bash
-curl "https://你的域名/run-all?key=你的AUTH_KEY"
+curl "https://你的域名/run-all?key=AUTH_KEY"
 ```
-> 自动跳过冷却中的账号，每次只处理一个。
 
-### 4️⃣ 查看账号列表
-
+**查看账号列表**：
 ```bash
-curl "https://你的域名/accounts?key=你的AUTH_KEY"
+curl "https://你的域名/accounts?key=AUTH_KEY"
 ```
 
----
+### Telegram 通知示例
 
-## 📸 效果展示
-
-### 🔔 Telegram 通知效果
-
-**任务完成时**：
-
+**任务完成**：
 ```
 ✅ 广告任务已完成
 
@@ -198,8 +206,7 @@ curl "https://你的域名/accounts?key=你的AUTH_KEY"
 TeoHeberg Daily Points
 ```
 
-**额度用完时**：
-
+**额度用完（冷却中）**：
 ```
 ⏳ 冷却中
 
@@ -210,8 +217,7 @@ TeoHeberg Daily Points
 TeoHeberg Daily Points
 ```
 
-**Cookie 失效时**：
-
+**Cookie 失效**：
 ```
 🚨 Cookie 已失效
 
@@ -224,23 +230,43 @@ TeoHeberg Daily Points
 
 ---
 
-## 💬 Telegram 通知说明
+## 共同部分
 
-配置 `TELEGRAM_BOT_TOKEN` 和 `TELEGRAM_CHAT_ID` 后：
+### Telegram 通知配置
 
-- ✅ 每次任务执行完毕自动推送积分变化  
-- ✅ 额度已用完时提示冷却（并显示下次可执行时间）  
-- ❌ 遇到 Cookie 失效、网络错误等会推送错误信息  
+两种方案共用同一个 Telegram Bot，只需在同一 Secret / 环境变量中填入：
+
+- `TG_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN`：通过 [@BotFather](https://t.me/BotFather) 创建  
+- `TG_CHAT_ID` / `TELEGRAM_CHAT_ID`：你的用户或群组 ID（可通过 [@userinfobot](https://t.me/userinfobot) 获取）
+
+未配置 Telegram 将不会发送通知，脚本 / Worker 仍会正常运行。
+
+### 常见问题
+
+**Q：可以同时使用两种方案吗？**  
+A：可以，但请注意 Cloudflare Workers 方案只负责广告积分（不包含续期），而 Python 方案同时包含续期和积分。建议只选一种广告积分实现，避免重复操作。
+
+**Q：reCAPTCHA 音频识别失败率高怎么办？**  
+A：Python 方案内置重试机制（最多 8 次），并且使用 WARP 更换出口 IP。如果频繁失败，可能是语音识别模型问题，可考虑换用其他识别引擎。
+
+**Q：Workers 方案需要 Cookie，多久失效？**  
+A：勾选“记住我”后 Cookie 一般可长期有效（数周至数月），一旦失效你会收到 Telegram 通知，只需重新获取并更新即可。
+
+**Q：免费 Workers 每日请求限制是多少？**  
+A：免费计划每日 10 万请求。本方案每次触发仅消耗极少请求，完全在额度内。
 
 ---
 
-## ❤️ 支持项目
+## 免责声明
 
-如果这个项目对你有帮助：  
-👉 点个 **Star ⭐** 支持一下吧！
+本工具仅供学习和自动化个人合法服务使用。请遵守 TeoHeberg 的服务条款，切勿用于商业或滥用目的。因使用本脚本/Worker 产生的任何问题，作者不承担任何责任。
 
 ---
 
-## ⚠️ 免责声明
+## 许可证
 
-本脚本仅供学习交流使用，使用者需遵守 TeoHeberg 的服务条款。因使用本脚本造成的任何问题，作者不承担任何责任。
+MIT License
+
+---
+
+**如果这个项目对你有帮助，请点个 Star ⭐ 支持！**
