@@ -440,13 +440,19 @@ def do_login(page):
     page.wait_for_timeout(3000)
     snap(page, "login-page")
     log.info(f"当前URL: {page.url}")
+
+    # ── 处理 reCAPTCHA ──
+    log.info("处理 reCAPTCHA...")
+    solve_recaptcha(page)
+    snap(page, "login-captcha-solved")
+
+    # ── 填写表单 ──
     page.fill('input[name="email"]', account["email"])
     page.fill('input[name="password"]', account["password"])
     log.info("☑️ 表单填写完成")
     snap(page, "login-form-filled")
-    log.info("处理 reCAPTCHA...")
-    solve_recaptcha(page)
-    snap(page, "login-captcha-solved")
+
+    # ── 提交 ──
     clicked = False
     for sel in [
         'button:has-text("Sign in")',
@@ -462,6 +468,7 @@ def do_login(page):
                 break
         except Exception:
             continue
+
     submitted = False
     try:
         submitted = page.evaluate("""() => {
@@ -472,13 +479,16 @@ def do_login(page):
         }""")
     except Exception:
         pass
+
     log.info(f"🚀 已提交登录 click={clicked} form={submitted}")
     page.wait_for_timeout(5000)
     snap(page, "login-submitted")
     log.info(f"登录后URL: {page.url}")
+
     if "login" in page.url.lower():
         snap(page, "login-failed")
         raise RuntimeError("❌ 登录失败，仍在登录页")
+
     wait_for_dashboard(page)
     log.info("✅ 登录成功")
 
@@ -496,7 +506,7 @@ def wait_for_dashboard(page, timeout=30):
     snap(page, "dashboard-timeout")
     raise RuntimeError("❌ 未回到 dashboard")
 
-# ── 续期逻辑（优化版）──
+# ── 续期逻辑 ──
 
 def parse_expiry_info(text: str):
     """
